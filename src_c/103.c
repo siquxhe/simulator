@@ -22,6 +22,9 @@ num_t reg_pc;
 num_t reg_op;
 
 int switch_output_numeral;
+int switch_input_numeral;
+int flag_stop_after_output;
+int halt_after_output;
 
 void set_pc(int val) {
     reg_pc = val & 0xfff;
@@ -29,6 +32,14 @@ void set_pc(int val) {
 
 void set_output_numeral(int val) {
     switch_output_numeral = val;
+}
+
+void set_input_numeral(int val) {
+    switch_input_numeral = val;
+}
+
+void set_stop_after_output(int val) {
+    flag_stop_after_output = val;
 }
 void init_mem() {
     machine_mem = malloc(sizeof(num_t) * 04000);
@@ -47,6 +58,9 @@ void run_machine() {
     num_t c1, c2;
     num_t op1, op2;
     while (1) {
+        if (halt_after_output) {
+            break;
+        }
         // 1
         reg_addr = reg_pc;
         reg_pc = reg_pc + 1;
@@ -211,42 +225,43 @@ void run_machine() {
 
 void do_input(int input_once) {
     char ch;
+    // 初始程序纸带装载（input_once==0）恒为八进制；运行期录入按输入进制开关。
+    // 十进制为 BCD 打包：每位占 4 bit；八进制每位占 3 bit。
+    int dec = (input_once && switch_input_numeral == DECIMAL);
+    int shift = dec ? 4 : 3;
+    int sign_neg = 0;
     while ((ch = fgetc(input_file)) != EOF) {
         if (ch == SPACE) {
             // nothing to do
         } else if (ch == POS) {
-            reg_c <<= 3;
-            reg_c |= 0x6;
+            if (dec) {
+                reg_c = 0;
+                sign_neg = 0;
+            } else {
+                reg_c <<= 3;
+                reg_c |= 0x6;
+            }
         } else if (ch == NEG) {
-            reg_c <<= 3;
-            reg_c |= 0x7;
-        } else if (ch == NUM0) {
-            reg_c <<= 3;
-            reg_c |= 0x0;
-        } else if (ch == NUM1) {
-            reg_c <<= 3;
-            reg_c |= 0x1;
-        } else if (ch == NUM2) {
-            reg_c <<= 3;
-            reg_c |= 0x2;
-        } else if (ch == NUM3) {
-            reg_c <<= 3;
-            reg_c |= 0x3;
-        } else if (ch == NUM4) {
-            reg_c <<= 3;
-            reg_c |= 0x4;
-        } else if (ch == NUM5) {
-            reg_c <<= 3;
-            reg_c |= 0x5;
-        } else if (ch == NUM6) {
-            reg_c <<= 3;
-            reg_c |= 0x6;
-        } else if (ch == NUM7) {
-            reg_c <<= 3;
-            reg_c |= 0x7;
+            if (dec) {
+                reg_c = 0;
+                sign_neg = 1;
+            } else {
+                reg_c <<= 3;
+                reg_c |= 0x7;
+            }
+        } else if (ch >= NUM0 && ch <= NUM9) {
+            reg_c <<= shift;
+            reg_c |= (ch - NUM0);
         } else if (ch == SET_ADD) {
             reg_addr = reg_c & 0xfff;
         } else if (ch == WRITE) {
+            if (dec) {
+                // BCD 左对齐到 30 位数值域顶部（7 位 ×4 bit，低 2 bit 留空），与输出解包位序一致
+                reg_c <<= 2;
+                if (sign_neg) {
+                    reg_c |= 0x40000000;
+                }
+            }
             machine_mem[reg_addr] = reg_c;
             if (input_once) break;
         } else if (ch == END_ARR) {
@@ -256,6 +271,9 @@ void do_input(int input_once) {
 }
 
 void do_output_reg_c() {
+    if (flag_stop_after_output) {
+        halt_after_output = 1;
+    }
     fprintf(output_file, "%c", (reg_c & 0x40000000) ? '-' : '+');
     if (switch_output_numeral == DECIMAL) {
         for (int i = 26; i >= 0; i -= 4) {
@@ -303,8 +321,8 @@ num_t do_sub(int sign_a, int num_a, int sign_b, int num_b) {
     return ans;
 }
 
-num_t do_div(int sign_a, long num_a, int sign_b, long num_b) {
-    long res = ((num_b << 30) / num_a);
+num_t do_div(int sign_a, long long num_a, int sign_b, long long num_b) {
+    long long res = (((long long)num_b << 30) / num_a);
     num_t ans;
     if (res > 0x3fffffff) {
         fprintf(stderr, "overflow\n");
@@ -320,8 +338,8 @@ num_t do_div(int sign_a, long num_a, int sign_b, long num_b) {
     return ans;
 }
 
-num_t do_mul(int sign_a, long num_a, int sign_b, long num_b) {
-    long res = (num_b * num_a) >> 30;
+num_t do_mul(int sign_a, long long num_a, int sign_b, long long num_b) {
+    long long res = (((long long)num_b * num_a) >> 30);
     num_t ans;
     if (res > 0x3fffffff) {
         fprintf(stderr, "overflow\n");

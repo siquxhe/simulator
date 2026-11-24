@@ -11,15 +11,19 @@
 
 int flag_decimal = 0;
 
-static char short_options[] = "s:d";
+static char short_options[] = "s:dDS";
 static struct option long_options[] = {
     {"start",   required_argument,  0,  's'},
     {"decimal", no_argument,        0,  'd'},
+    {"input-decimal", no_argument,  0,  'D'},
+    {"stop-after-output", no_argument, 0, 'S'},
     {0,         0,                  0,   0 },
 };
 
 int main(int argc, char ** argv) {
     set_output_numeral(OCTAL);
+    set_input_numeral(OCTAL);
+    set_stop_after_output(0);
     set_pc(0);
 
     while (1) {
@@ -38,6 +42,12 @@ int main(int argc, char ** argv) {
             set_pc(start_addr);
         } else if (c == 'd') {
             set_output_numeral(DECIMAL);
+
+        } else if (c == 'D') {
+            set_input_numeral(DECIMAL);
+
+        } else if (c == 'S') {
+            set_stop_after_output(1);
 
         } else {
             printf("%c\n", c);
@@ -60,7 +70,7 @@ int main(int argc, char ** argv) {
     init_mem();
 
     do_input(0);
-    run_machine(input_file);
+    run_machine();
 
     // print_mem();
 

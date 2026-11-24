@@ -14,6 +14,8 @@ extern FILE * input_file;
 
 void set_pc(int val);
 void set_output_numeral(int val);
+void set_input_numeral(int val);
+void set_stop_after_output(int val);
 
 void init_mem();
 void print_mem();
@@ -29,8 +31,8 @@ void do_output_reg_c();
 
 num_t do_add(int sign_a, int num_a, int sign_b, int num_b);
 num_t do_sub(int sign_a, int num_a, int sign_b, int num_b);
-num_t do_div(int sign_a, long num_a, int sign_b, long num_b);
-num_t do_mul(int sign_a, long num_a, int sign_b, long num_b);
+num_t do_div(int sign_a, long long num_a, int sign_b, long long num_b);
+num_t do_mul(int sign_a, long long num_a, int sign_b, long long num_b);
 num_t do_and(int sign_a, int num_a, int sign_b, int num_b);
 
 void print_status();
