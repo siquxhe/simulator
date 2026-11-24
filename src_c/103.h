@@ -1,3 +1,5 @@
+#include <stdio.h>
+
 #define DECIMAL 1
 #define OCTAL   0
 
@@ -11,6 +13,9 @@ typedef unsigned int num_t;
 
 extern FILE * output_file;
 extern FILE * input_file;
+
+/* 模拟器扁平内存（4096 字）；供外挂外设（如拷贝引擎接入桥）绑定同一内存区。 */
+extern num_t * machine_mem;
 
 void set_pc(int val);
 void set_output_numeral(int val);
