@@ -453,7 +453,7 @@ int load_image(const char *path) {
     /* 复核整体校验和（覆盖目录头 + 段表 + 镜像体，不含校验尾）。 */
     uint32_t sum = 0;
     for (uint32_t i = 0; i < nwords - 1u; i++) {
-        sum = (sum + img_sum_word(w[i])) & IMG_VALUE_MASK;
+        sum = (sum + img_sum_word(w[i])) & IMG_SUM_MASK;
     }
     if (sum != w[nwords - 1u]) {
         fprintf(stderr, "load_image: 校验和不匹配（算出 %08x，镜像 %08x）\n", sum, w[nwords - 1u]);
