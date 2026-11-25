@@ -25,6 +25,10 @@ void set_stop_after_output(int val);
 void init_mem();
 void print_mem();
 
+/* P0-2 结构化镜像装载：读镜像 -> 校验魔数/校验和/段表 -> 清零主存 -> 按段写入 -> 置入口 PC。
+ * 返回 0 成功；非零失败（报错已写 stderr）。旧纸带通路不经此函数。 */
+int load_image(const char *path);
+
 void mem_write();
 void mem_read();
 

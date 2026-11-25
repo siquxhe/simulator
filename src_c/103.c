@@ -3,9 +3,11 @@
 #include <errno.h>
 #include <err.h>
 #include <ctype.h>
+#include <string.h>
 
 #include "103.h"
 #include "tape.h"
+#include "image_format.h"
 
 FILE * output_file;
 FILE * input_file;
@@ -43,6 +45,8 @@ void set_stop_after_output(int val) {
 }
 void init_mem() {
     machine_mem = malloc(sizeof(num_t) * 04000);
+    /* 装载前清零：BRAM/堆上电不定，未覆盖地址不得留垃圾值参与运算（4f §5.2-5）。 */
+    memset(machine_mem, 0, sizeof(num_t) * 04000);
 }
 
 void print_mem() {
@@ -367,4 +371,109 @@ void print_status() {
     printf("op: %02o\t", reg_op);
     printf("c: %c %010o", (reg_c & 0x40000000) ? '-' : '+', reg_c & 0x3fffffff);
     printf("\n");
+}
+
+int load_image(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "load_image: 打不开 %s\n", path); return 1; }
+
+    if (fseek(f, 0, SEEK_END) != 0) { fprintf(stderr, "load_image: 定位镜像失败\n"); fclose(f); return 1; }
+    long sz = ftell(f);
+    if (sz < 0) { fprintf(stderr, "load_image: 读取镜像大小失败\n"); fclose(f); return 1; }
+    rewind(f);
+
+    if (sz < (long)(4 * 3)) { fprintf(stderr, "load_image: 镜像过短（不足目录头+校验尾）\n"); fclose(f); return 1; }
+    if (sz % 4 != 0) { fprintf(stderr, "load_image: 镜像长度非 4 字节倍数\n"); fclose(f); return 1; }
+
+    uint32_t nwords = (uint32_t)(sz / 4);
+    uint32_t *w = malloc((size_t)sz);
+    if (!w) { fprintf(stderr, "load_image: 内存分配失败\n"); fclose(f); return 1; }
+
+    uint8_t buf[4];
+    for (uint32_t i = 0; i < nwords; i++) {
+        if (fread(buf, 1, 4, f) != 4) {
+            fprintf(stderr, "load_image: 读取截断\n"); free(w); fclose(f); return 1;
+        }
+        w[i] = img_get_le32(buf);
+    }
+    fclose(f);
+
+    /* 魔数 */
+    if (w[0] != IMG_MAGIC) {
+        fprintf(stderr, "load_image: 魔数错（非合法镜像）\n"); free(w); return 1;
+    }
+
+    uint32_t n         = img_hdr1_n(w[1]);
+    uint32_t entry     = img_hdr1_entry(w[1]);
+    uint32_t ver_algo  = img_hdr1_ver_algo(w[1]);
+    uint32_t ver       = ver_algo >> 3;
+    uint32_t algo      = ver_algo & 0x7u;
+
+    if (ver != IMG_VERSION) { fprintf(stderr, "load_image: 镜像版本不支持\n"); free(w); return 1; }
+    if (algo != IMG_ALGO_SUM) { fprintf(stderr, "load_image: 校验算法不支持（CRC-16 预留）\n"); free(w); return 1; }
+    if (n == 0 || n > IMG_MAX_SEG) { fprintf(stderr, "load_image: 段数非法（%u）\n", n); free(w); return 1; }
+    if (entry >= IMG_WORDS) { fprintf(stderr, "load_image: 入口 PC 越界\n"); free(w); return 1; }
+
+    const uint32_t hdr_words = 2;
+    uint32_t body_start_word = hdr_words + 2u * n;
+    uint32_t body_words = 0;
+
+    /* 第一遍：类型/字数/目的边界校验，累计镜像体字数。 */
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t a   = w[hdr_words + 2u * i];
+        uint32_t b   = w[hdr_words + 2u * i + 1];
+        uint32_t dst = img_seg_a_dst(a);
+        uint32_t type = img_seg_a_type(a);
+        uint32_t len = img_seg_b_len(b);
+
+        if (type == SEG_RSV || type > SEG_TYPE_MAX) {
+            fprintf(stderr, "load_image: 段 %u 类型保留/未知（%u）\n", i, type); free(w); return 1;
+        }
+        if (len == 0) { fprintf(stderr, "load_image: 段 %u 字数为 0\n", i); free(w); return 1; }
+        if (dst + len > IMG_WORDS) { fprintf(stderr, "load_image: 段 %u 目的越界（%u+%u）\n", i, dst, len); free(w); return 1; }
+        body_words += len;
+    }
+
+    /* 第二遍：body 内字索引范围校验。 */
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t a   = w[hdr_words + 2u * i];
+        uint32_t b   = w[hdr_words + 2u * i + 1];
+        uint32_t off = img_seg_a_off(a);
+        uint32_t len = img_seg_b_len(b);
+        if (off + len > body_words) {
+            fprintf(stderr, "load_image: 段 %u 镜像体偏移越界（索引 %u, 字数 %u）\n", i, off, len);
+            free(w); return 1;
+        }
+    }
+
+    if (body_start_word + body_words + 1u != nwords) {
+        fprintf(stderr, "load_image: 镜像体字数与段表不符\n"); free(w); return 1;
+    }
+
+    /* 复核整体校验和（覆盖目录头 + 段表 + 镜像体，不含校验尾）。 */
+    uint32_t sum = 0;
+    for (uint32_t i = 0; i < nwords - 1u; i++) {
+        sum = (sum + img_sum_word(w[i])) & IMG_VALUE_MASK;
+    }
+    if (sum != w[nwords - 1u]) {
+        fprintf(stderr, "load_image: 校验和不匹配（算出 %08x，镜像 %08x）\n", sum, w[nwords - 1u]);
+        free(w); return 1;
+    }
+
+    /* 装载：先清零主存，再按段写入。 */
+    memset(machine_mem, 0, sizeof(num_t) * 04000);
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t a   = w[hdr_words + 2u * i];
+        uint32_t b   = w[hdr_words + 2u * i + 1];
+        uint32_t dst = img_seg_a_dst(a);
+        uint32_t off = img_seg_a_off(a);
+        uint32_t len = img_seg_b_len(b);
+        for (uint32_t k = 0; k < len; k++) {
+            machine_mem[dst + k] = w[body_start_word + off + k];
+        }
+    }
+
+    free(w);
+    set_pc((int)entry);
+    return 0;
 }
